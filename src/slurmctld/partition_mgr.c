@@ -1913,7 +1913,7 @@ extern int validate_group(part_record_t *part_ptr, uid_t run_uid)
 #if defined(_SC_GETPW_R_SIZE_MAX)
 	long ii;
 #endif
-	int i = 0, res, uid_array_len;
+	int i = 0, res, uid_array_len = 0;
 	size_t buflen;
 	struct passwd pwd, *pwd_result;
 	char *buf;
@@ -1921,19 +1921,21 @@ extern int validate_group(part_record_t *part_ptr, uid_t run_uid)
 	struct group grp, *grp_result;
 	char *groups, *saveptr = NULL, *one_group_name;
 	int ret = 0;
+	int ngroups = 0;
+	gid_t *kgroups;
 
 	if (part_ptr->allow_groups == NULL)
 		return 1;	/* all users allowed */
 	if (validate_slurm_user(run_uid))
 		return 1;	/* super-user can run anywhere */
-	if (part_ptr->allow_uids == NULL)
-		return 0;	/* no non-super-users in the list */
 
-	for (i = 0; part_ptr->allow_uids[i]; i++) {
-		if (part_ptr->allow_uids[i] == run_uid)
-			return 1;
+	if (part_ptr->allow_uids != NULL) {
+		for (i = 0; part_ptr->allow_uids[i]; i++) {
+			if (part_ptr->allow_uids[i] == run_uid)
+				return 1;
+		}
+		uid_array_len = i;
 	}
-	uid_array_len = i;
 
 	/* If this user has failed AllowGroups permission check on this
 	 * partition in past 5 seconds, then do not test again for performance
@@ -1988,6 +1990,65 @@ extern int validate_group(part_record_t *part_ptr, uid_t run_uid)
 		break;
 	}
 
+	/* KCL
+	 * Shortcut for SSSD slowness when enumerate is on. */
+	kgroups = xmalloc(sizeof(*kgroups) * ngroups);
+	getgrouplist(pwd.pw_name, pwd.pw_gid, kgroups, &ngroups);
+	xrealloc(kgroups, sizeof(*kgroups) * ngroups);
+	if (getgrouplist(pwd.pw_name, pwd.pw_gid, kgroups, &ngroups) != -1)
+	{
+		debug("KCL patch - attempting to locate user groups... ");
+		for (int j = 0; j < ngroups; j++)
+		{
+#ifdef _SC_GETGR_R_SIZE_MAX
+			ii = sysconf(_SC_GETGR_R_SIZE_MAX);
+			buflen = PW_BUF_SIZE;
+			if ((ii >= 0) && (ii > buflen))
+				buflen = ii;
+#endif
+			grp_buffer = xmalloc(buflen);
+			while (1)
+			{
+				res = getgrgid_r(kgroups[j], &grp, grp_buffer, buflen,
+								 &grp_result);
+			
+				if ((res != 0 || !grp_result) && errno == ERANGE)
+				{
+					buflen *= 2;
+					xrealloc(grp_buffer, buflen);
+					continue;
+				}
+
+				if (res == 0 && grp_result)
+				{
+					groups = xstrdup(part_ptr->allow_groups);
+					one_group_name = strtok_r(groups, ",", &saveptr);
+					while (one_group_name)
+					{
+						if (xstrcmp(one_group_name, grp_result->gr_name) == 0)
+						{
+							ret = 1;
+							xfree(kgroups);
+							xfree(groups);
+							xfree(buf);
+							goto fini;
+						}
+						one_group_name = strtok_r(NULL, ",", &saveptr);
+					}
+					saveptr = NULL;
+					xfree(groups);
+				}
+				break;
+			}
+			xfree(grp_buffer);
+		}
+	}
+	else
+	{
+		error("getgrouplist() returned -1; ngroups = %d\n", ngroups);
+	}
+	xfree(kgroups);
+
 	/* Then use the primary GID to figure out the name of the
 	 * group with that GID.  */
 #ifdef _SC_GETGR_R_SIZE_MAX
@@ -2015,7 +2076,6 @@ extern int validate_group(part_record_t *part_ptr, uid_t run_uid)
 			error("%s: Could not find group with gid %u",
 			      __func__, pwd.pw_gid);
 			xfree(buf);
-			xfree(grp_buffer);
 			goto fini;
 		}
 		break;
@@ -2034,18 +2094,25 @@ extern int validate_group(part_record_t *part_ptr, uid_t run_uid)
 	}
 	xfree(groups);
 	xfree(buf);
-	xfree(grp_buffer);
 
+fini:
 	if (ret == 1) {
 		debug("UID %ld added to AllowGroup %s of partition %s",
-		      (long) run_uid, grp.gr_name, part_ptr->name);
-		part_ptr->allow_uids =
-			xrealloc(part_ptr->allow_uids,
-				 (sizeof(uid_t) * (uid_array_len + 1)));
+			  (long)run_uid, grp.gr_name, part_ptr->name);
+		if (part_ptr->allow_uids == NULL)
+		{
+			part_ptr->allow_uids = xmalloc((sizeof(uid_t) * 1));
+		}
+		else
+		{
+			part_ptr->allow_uids = xrealloc(part_ptr->allow_uids,
+											(sizeof(uid_t) * (uid_array_len + 1)));
+		}
 		part_ptr->allow_uids[uid_array_len] = run_uid;
 	}
+	xfree(grp_buffer);
 
-fini:	if (ret == 0) {
+	if (ret == 0) {
 		last_fail_uid = run_uid;
 		last_fail_part_ptr = part_ptr;
 		last_fail_time = now;
