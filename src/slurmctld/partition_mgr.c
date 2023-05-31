@@ -1997,7 +1997,7 @@ extern int validate_group(part_record_t *part_ptr, uid_t run_uid)
 	xrealloc(kgroups, sizeof(*kgroups) * ngroups);
 	if (getgrouplist(pwd.pw_name, pwd.pw_gid, kgroups, &ngroups) != -1)
 	{
-		debug("KCL patch - attempting to locate user groups... ");
+		debug(sprintf("KCL patch - attempting to locate groups for user %s... ", pwd.pw_name));
 		for (int j = 0; j < ngroups; j++)
 		{
 #ifdef _SC_GETGR_R_SIZE_MAX
