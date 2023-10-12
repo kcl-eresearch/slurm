@@ -429,3 +429,52 @@ static void _log_group_members(char *group_name, uid_t *group_uids, int uid_cnt)
 		info("  %u", group_uids[i]);
 #endif
 }
+
+/* KCl patch */
+int is_user_in_group(uid_t uid, const char *allowed_groups) {
+    int ngroups = 0;
+    gid_t *kgroups = NULL;
+    int ret = 0;
+	struct passwd pwd, *result;
+	char buffer[PW_BUF_SIZE];
+
+	rc = slurm_getpwuid_r(uid, &pwd, buffer, PW_BUF_SIZE, &result);
+	if (result == NULL) {
+		return 0;
+	}
+
+    if (getgrouplist(pwd.pw_name, pwd.pw_gid, NULL, &ngroups) == -1) {
+        kgroups = (gid_t *)malloc(ngroups * sizeof(gid_t));
+        if (getgrouplist(pwd.pw_name, pwd.pw_gid, kgroups, &ngroups) == -1) {
+            free(kgroups);
+            return 0;  // Error getting groups
+        }
+    }
+
+    for (int i = 0; i < ngroups; i++) {
+        struct group grp, *grp_result;
+        size_t buflen = sysconf(_SC_GETGR_R_SIZE_MAX);
+        char *grp_buffer = (char *)malloc(buflen);
+
+        if (getgrgid_r(kgroups[i], &grp, grp_buffer, buflen, &grp_result) == 0 && grp_result) {
+            char *groups = strdup(allowed_groups);
+            char *saveptr;
+            char *one_group_name = strtok_r(groups, ",", &saveptr);
+
+            while (one_group_name) {
+                if (strcmp(one_group_name, grp_result->gr_name) == 0) {
+                    ret = 1;
+                    break;
+                }
+                one_group_name = strtok_r(NULL, ",", &saveptr);
+            }
+
+            free(groups);
+        }
+
+        free(grp_buffer);
+    }
+
+    free(kgroups);
+    return ret;
+}

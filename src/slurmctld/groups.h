@@ -54,6 +54,7 @@ extern void clear_group_cache(void);
  * NOTE: Call clear_group_cache() to flush cache
  */
 extern uid_t *get_groups_members(char *group_names, int *user_cnt);
+extern int is_user_in_group(uid_t pwd, const char *allowed_groups);
 
 /* get_group_tlm - return the time of last modification for the GROUP_FILE */
 extern time_t get_group_tlm(void);

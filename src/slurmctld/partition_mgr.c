@@ -2070,6 +2070,11 @@ extern int validate_group(part_record_t *part_ptr, uid_t run_uid)
 	xfree(groups);
 	xfree(primary_group);
 
+	/* KCL - Really finally, look up user groups our way. */
+	if (is_user_in_group(run_uid, part_ptr->allow_groups))) {
+		ret = 1;
+	}
+
 	if (ret == 1) {
 		debug("UID %u added to AllowGroup %s of partition %s",
 		      run_uid, primary_group, part_ptr->name);
