@@ -437,6 +437,7 @@ int is_user_in_group(uid_t uid, const char *allowed_groups) {
     int ret = 0;
 	struct passwd pwd, *result;
 	char buffer[PW_BUF_SIZE];
+	int rc;
 
 	rc = slurm_getpwuid_r(uid, &pwd, buffer, PW_BUF_SIZE, &result);
 	if (result == NULL) {
